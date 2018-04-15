@@ -13,7 +13,9 @@ naiveOLS$xlevels[["cat110"]] = union(naiveOLS$xlevels[["cat110"]], levels(pml.te
 naiveOLS$xlevels[["cat113"]] = union(naiveOLS$xlevels[["cat113"]], levels(pml.test$cat113))
 naiveOLS$xlevels[["cat114"]] = union(naiveOLS$xlevels[["cat114"]], levels(pml.test$cat114))
 naiveOLS$xlevels[["cat116"]] = union(naiveOLS$xlevels[["cat116"]], levels(pml.test$cat116))
-naivePred = predict(naiveOLS, newdata = pml.test)
-naivePred[exp(naivePred) > max(pml.train$loss)] = log(max(pml.train$loss))
+naivePred = exp(predict(naiveOLS, newdata = pml.test))
 submission$loss = naivePred
 write.csv(submission, file = "submission.csv", row.names = FALSE)
+trollPred = median(pml.train$loss)
+trollPred2 = mean(pml.train$loss)
+submission$loss = trollPred2

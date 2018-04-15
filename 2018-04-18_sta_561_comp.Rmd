@@ -1,0 +1,223 @@
+---
+title: "STA 561 Kaggle Write-up"
+author: "Daniel Truver (Team Kernel Sanders)"
+date: "4/18/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+pml.train = read.csv("pml_train.csv")
+y = pml.train$loss
+library(dplyr)
+```
+
+#### (1) Exploratory Analysis 
+
+To begin with, missing variable names were detrimental to my modeling process. For all I know, `cat73` was whether or not the insurance claim involved bears and `cont7` was exactly how on fire the car was. Hopefully those two did not occur together, but I have no way of knowing because the variables don't have names. Without knowledge of the data in context, I lack intuition about what should effect the model. I'm down the first 2 steps of the CRISP-DM process. Add to that I don't know how the data were collected, and I'm out 50% of the process. My model could think that eating spicy noodles and idolizing Rasputin predict insurnace loss. You might say, "those are ridiculous predictors, why would those even be in the data?" But you can't tell me for sure they aren't, and that's kind of the point. 
+
+But I digress. I first explored the data by looking at a histogram of the losses.
+
+```{r}
+hist(y)
+```
+
+That wasn't helpful, so I adjusted to the 99% quantile.
+
+```{r}
+hist(y %>% .[.<quantile(.,.99)], main = "0.99 Quantile Cutoff", xlab = "loss")
+```
+
+We see that a majority of claims stay around 6000 and below. The whole thing is quite skewed. We may want a log transform in the future. At this point, I would usually google some of the variables to see what knowledge exists about their relation to loss, but...well, we covered the problem with that. 
+
+```{r}
+hist(log(y))
+```
+
+The log transform works wonders for making the distribution look normal. Because it has this nice structure in the log, we will use ridge regression as one of our methods. 
+
+Other EDA was difficult to perform, such as staring at boxplots of categorical variables for hours. Not much useful came from it. For both our sakes and the compiling time of this document, those graphs are ommitted here.
+
+#### (2) Models
+
+In the interest of making my model more interesting (and so I could learn outside the box), I decided to not model the response as a continuous variable. Instead, I broke the response into quantiles. This gave me $m$ categories into which I would fit the data. This made $m$ a hyper-parameter in my models, along with the quantile divisions (they were not all evenly spaced), but more on that later. If the model predicted point $i$ was in category $j$, then I predicted the median of observations in category $j$ to be the value of `loss`. 
+
+The other model I used was a fresh out of the box ridge regression from R's `MASS` library. Honestly, I would have preferred to slap some boosted decision trees on here since I have no idea what's going on with these predictors, but the first model took a long time to debug and tune. Given the practical limitations on my time, it would not have gone well for me to attempt boosting. 
+
+Really, the first model was my exploration of the question: "Could random forest techniques work for something other than decisions trees?" My conclusion, by the way, no, at least not the way I did it for GLMs. 
+
+I thought that if I could tune the values just right, the model would be more accurate and it would be like the golden ticket, like winning the lottery.
+
+![](lottery2.png) 
+
+\newpage
+
+It did not go as planned.  
+
+I began with linear regression just to get on the leaderboard and see how the submissions worked. After that, I tried two more models which became more interesting. My leaderboard rank, on the other hand, very iffy. 
+
+##### Model 1: Bag of GLMs 
+
+First, I wanted to see what would happen if I applied the techniques of random forests to generalized linear models. That is, I took a bootstrap sample of $n$ observations, a $\sqrt{p}$ subset of predictors, fit a logisitic regression to this set, did this 80 times, and predicted category of loss by a majority vote of the regression models. The primary motivation of this model was curiosity. The `glm` function in `R` is well established, it's easy to use, and logistic regression models are easy to understand; I wanted to explore outside its mundane uses. The process was as follows:
+
+for t in 1 to 80:  
+--randomly select $\sqrt{p}$ predictors  
+--take bootstrap sample S  
+--for j in 1 to m:  
+----fit logistic regression predicting category j   
+----predict on test set, store probability of belonging to category j  
+--for each point in test set:  
+----category with highest probability becomes vote(t)  
+take majority over vote(t) to get predictions for each point  
+
+The parameters in this model are $m$, the number of categories, and the cutoff points. For example, the first configuration was $m=10$ categories, where category $j$ was the $j\cdot 10$% quantile (i.e. 10% quantile, 20% quantile...) of the reponse in the training set. The 10% quantile was about 700, so all observations with values between 0 and 700 were to category 1. The 20% quantile was about 1200, so category 2 observations with values between 700 and 1200 were category 2. So on and so forth. For the tuning of these parameters, see the Training section.
+
+##### Model 2: Boring Ridge Regression
+
+The second model was a ridge regression. I used the ready to serve `lm.ridge` from the `MASS` package in R. Tunning of the regularization term happened by 10-fold cross validation. 
+
+#### (3) Training
+
+##### Bag of GLMs Training
+
+The training algorithm is the standard training for logistic regression. R's `glm` uses the method of maximum likelihood to fit the model. All documentation I can find indicates that R uses the gradient method on the log of the likelihood. The training process is the same for each model in each bag. 
+
+##### Ridge Regression Training
+
+The `MASS` packages ridge regression finds the closed form solution to the ridge regression problem using the SVD decomposition. 
+
+#### (4) Hyperparameter Selection
+
+##### Bag of GLMs hyperparameters
+
+Right up front, I want to say, I did not tune the number of GLMs fit; it was always 100 once I got the loop working. The tuning occured in divding up the response categories. Why 100? There was a balancing act between "I want enough iterations that each predictor has a reasonable chance of being selected at least once" and "this takes too long to run." More on this problem in the Errors and Mistakes section. 
+
+The process for tuning category divisions was fairly simple: try a lot and see what does the best. I tried dividing at every 10% quantile, did not have a good experience, and noticed the model was prediciting 90% and above percentile for far too many points. I hypothesized the problem was the range of the 90% qauntile which reached all the way from 10,000 to above 100,000. So, I cut the tail by introducing a division at the 99% quantile. I alternatively tried coarse and fine divisions (see table below) to see the effects on accuracy. One configuration that may seem odd compared to the others is the last one in the table below. Those values came from an attempt to equally divide the range of the response (excluding the tail, which is too skewed). 
+
+There is no meaningful way to represent this scheme graphically, so I have included a table. 
+
+```{r}
+#10 quants: mean_mae = 3125.001; med_mae = 2741.118
+#11 quants: mean_mae = 2206.6; med_mae = 2114.743
+# 8 quants: mean_mae = 1864.11; med_mae = 1869.394
+# 7 quants: mean_mae = 1874.184; med_mae = 1870.166
+# 6 quants: mean_mae = 1774.36; med_mae = 1769.887
+# 5 quants: mean_mae = 1782.928; med_mae = 1778.672
+# 4 quants: mean_mae = 1936.599; med_mae = 1783.398
+# 3 quants: mean_mae = 1862.953; med_mae = 1858.794
+#2.1 quants: mean_mae = 1808.455; med_mae = 1689.38
+# 2 quants: mean_mae = 1617.419; med_mae = 1616.23
+splitList = list(c(seq(0.1,1, length.out = 10)),
+                 c(seq(0.1,0.9, length.out = 9),0.99,1),
+                 c(0.25, 0.55, 0.73, 0.82, 0.885, 0.925, 0.95, 0.97, 1),
+                 c(0.25,0.50,0.75,0.90,0.95,0.99,1),
+                 c(0.25,0.50,0.75,0.95,0.99,1),
+                 c(0.25,0.50,0.75,0.95,1),
+                 seq(.25,1,length.out = 4),
+                 c(0.25,0.75,0.95,1),
+                 c(0.33,0.66,1),
+                 c(0.50,1))
+table4 = data.frame(mean_mae = c(3125,2206,1864,1874,1774,1782,1936,1862,1808,1617),
+                    med_mae = c(2741,2114,1869,1870,1769,1778,1783,1858,1689,1616))
+table4$splits = splitList
+knitr::kable(table4, col.names = c("Pred = Mean", "Pred = Median", "Quantile Splits"),
+             caption = "MAE from Predicting Mean of Category vs Median of Category",
+             row.names = FALSE)
+```
+
+To my surprise, MAE was best with coarse splits of the data. 
+
+##### Ridge Regression hyperparameters
+
+The results of the cross validation are below.  
+
+```{r}
+library(ggplot2)
+load("ridgemae.Rdata")
+finalMAEs = apply(MAEmatrix, 2, mean)
+C = as.numeric(names(finalMAEs))
+ggplot(data = data.frame(finalMAEs, C), aes(x = C, y = finalMAEs)) +
+  geom_point() +
+  theme_bw() +
+  ggtitle("MAE vs Regularization Term") + xlab("C") + ylab("MAE") +
+  ylim(1251, 1252)
+```
+
+As you can see, not much changes in the MAE for different values of $C$ in our ridge regression. 
+
+#### (5) Data Splits
+
+##### Bag of GLMs 
+
+Due to the running time of this model, cross validation was very simple. Leave out a tenth of the data, fit on the remaining nine tenths, and evaluate on the left out set. I would have liked to do full 10-fold cross validation, but a single run of that would have taken 60 hours. Fun fact: I would have been able to run the model a total of 12 times between spring break and now using the 10-fold. In the bootstrap I trust to prevent overfitting. Likewise, I trust in the random selection of predictors at each phase. The voting method also should prevent a single overfitted model from dominating the predictions.
+
+##### Ridge Regression
+
+The regularization term in the ridge regression should help with the problem of overfitting. Tuning of this parameter happened by 10-fold cross validation. 
+
+#### (6) Errors and Mistakes
+
+How much time have you got, doc?
+
+I embarked on this competition thinking that I would just go down the rabbit hole, see where it took me, and maybe I'd find a pot of gold at the end of the rainbow. 
+
+![](endOfRainbow1.png)
+
+\newpage
+
+It did not go as planned.
+
+I delved too greedily and too deep. I pursued a model that was for my personal curiosity and for the thrill of exploring something new. The computation time was too long and tuning the Bagged GLMs did not leave me much time for my second model. My schedule for the past several weeks has been: wake up, tune model, run model, breakfast, class, check model, it's not done running, homework, dinner, check model, it's done, record error, tune model, run model, homework, cry, homework, midnight, check model, it's not done, sleep, model finishes, wake up, tune model. You get the idea. 
+
+Had I used a method with established tuning parameters, I would have happily left it to run in a loop on the stat department's 24-core machine for a week and collected my cross-validated results at the end. Alas, hindsight. 
+
+The hardest part of the competition was getting out of bed each morning.
+
+#### (7) Predictive Accuracy
+
+I did not make many submissions to Kaggle because I based my decisions about model tuning and cross-validation error. For that reason, I do not have any plots of true test error, so please enjoy these returning plots of accuracy from the sections above. 
+
+```{r}
+#10 quants: mean_mae = 3125.001; med_mae = 2741.118
+#11 quants: mean_mae = 2206.6; med_mae = 2114.743
+# 8 quants: mean_mae = 1864.11; med_mae = 1869.394
+# 7 quants: mean_mae = 1874.184; med_mae = 1870.166
+# 6 quants: mean_mae = 1774.36; med_mae = 1769.887
+# 5 quants: mean_mae = 1782.928; med_mae = 1778.672
+# 4 quants: mean_mae = 1936.599; med_mae = 1783.398
+# 3 quants: mean_mae = 1862.953; med_mae = 1858.794
+#2.1 quants: mean_mae = 1808.455; med_mae = 1689.38
+# 2 quants: mean_mae = 1617.419; med_mae = 1616.23
+splitList = list(c(seq(0.1,1, length.out = 10)),
+                 c(seq(0.1,0.9, length.out = 9),0.99,1),
+                 c(0.25, 0.55, 0.73, 0.82, 0.885, 0.925, 0.95, 0.97, 1),
+                 c(0.25,0.50,0.75,0.90,0.95,0.99,1),
+                 c(0.25,0.50,0.75,0.95,0.99,1),
+                 c(0.25,0.50,0.75,0.95,1),
+                 seq(.25,1,length.out = 4),
+                 c(0.25,0.75,0.95,1),
+                 c(0.33,0.66,1),
+                 c(0.50,1))
+table4 = data.frame(mean_mae = c(3125,2206,1864,1874,1774,1782,1936,1862,1808,1617),
+                    med_mae = c(2741,2114,1869,1870,1769,1778,1783,1858,1689,1616))
+table4$splits = splitList
+knitr::kable(table4, col.names = c("Pred = Mean", "Pred = Median", "Quantile Splits"),
+             caption = "MAE from Predicting Mean of Category vs Median of Category",
+             row.names = FALSE)
+```
+
+```{r}
+library(ggplot2)
+load("ridgemae.Rdata")
+finalMAEs = apply(MAEmatrix, 2, mean)
+C = as.numeric(names(finalMAEs))
+ggplot(data = data.frame(finalMAEs, C), aes(x = C, y = finalMAEs)) +
+  geom_point() +
+  theme_bw() +
+  ggtitle("MAE vs Regularization Term") + xlab("C") + ylab("MAE") +
+  ylim(1251, 1252)
+```
+
+#### (7.5) Closing Thoughts
+
+Even though the accuracy of the Bag of GLMs is questionable, I am glad I decided to explore it. It gave me practice transforming a problem with continuous response to one with classification response. Exposure to those challenges (such as "where do we split categories") was new and memorable. To guess at why the Bag of GLMs is inferior to a random forest, I would say its the strength of a GLM versus a decision tree. The individual tight fit of every tree within a forest is superior to the fit of a GLM. This revelation isn't much help to me in terms of the competition, but it does satisfy my own curiosity about Machine Learning. 

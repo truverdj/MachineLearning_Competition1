@@ -221,3 +221,138 @@ ggplot(data = data.frame(finalMAEs, C), aes(x = C, y = finalMAEs)) +
 #### (7.5) Closing Thoughts
 
 Even though the accuracy of the Bag of GLMs is questionable, I am glad I decided to explore it. It gave me practice transforming a problem with continuous response to one with classification response. Exposure to those challenges (such as "where do we split categories") was new and memorable. To guess at why the Bag of GLMs is inferior to a random forest, I would say its the strength of a GLM versus a decision tree. The individual tight fit of every tree within a forest is superior to the fit of a GLM. This revelation isn't much help to me in terms of the competition, but it does satisfy my own curiosity about Machine Learning. 
+
+#### (8) Code: DO NOT ATTEMPT TO RUN ON LAPTOP 
+
+Heed the warning. This code takes upwards of six hours to run on the Stat department's 24-core machine (dependent on number of active users). If you try to run it on your laptop, you're going to have a bad day, and that does not bode well for my grade. 
+
+##### Bag of GLMs
+
+```{r, eval=FALSE}
+library(dplyr)
+library(stringr)
+mae = function(y, y_pred){ # MAE calculating function
+  mean(abs(y-y_pred))
+}
+pml.train = read.csv("pml_train.csv")
+y = pml.train$loss
+num_quants = 10 # just selects with split configuration to use
+quants = data.frame(lwr = rep(NA, num_quants), upr = rep(NA, num_quants)) # to assign categories
+pred_mean = rep(NA, num_quants) # to be used to predict mean of category
+pred_med = rep(NA, num_quants) # to be used to predict median of category
+####### SPLIT CONFIGURATIONS
+if(num_quants == 10){
+  up = seq(0.1,1, length.out = num_quants)
+  lo = up - 0.1
+} else if(num_quants == 11) {
+  up = c(seq(0.1,0.9, length.out = 9),0.99,1)
+  lo = c(seq(0,0.9, length.out = 10),0.99)
+} else if(num_quants == 4) {
+  up = seq(.25,1,length.out = 4)
+  lo = seq(0,.75,length.out = 4)
+} else if(num_quants == 5){
+  up = c(0.25,0.50,0.75,0.95,1)
+  lo = c(0,0.25,0.50,0.75,0.95)
+} else if(num_quants == 6){
+  up = c(0.25,0.50,0.75,0.95,0.99,1)
+  lo = c(0,0.25,0.50,0.75,0.95,0.99)
+} else if(num_quants == 8){
+  up = c(0.25, 0.55, 0.73, 0.82, 0.885, 0.925, 0.95, 0.97, 1)
+  lo = c(0, 0.25, 0.55, 0.73, 0.82, 0.885, 0.925, 0.95, 0.97)
+} else if(num_quants == 7){
+  up = c(0.25,0.50,0.75,0.90,0.95,0.99,1)
+  lo = c(0,0.25,0.50,0.75,0.90,0.95,0.99)
+} else if (num_quants == 3){
+  up = c(0.25,0.75,0.95,1)
+  lo = c(0,0.25,0.75,0.95)
+} else if (num_quants == 2){
+  up = c(0.50,1)
+  lo = c(0,0.50)
+} else if (num_quants == 2.1){
+  up = c(0.33,0.66,1)
+  lo = c(0,0.33,0.66)
+}
+####### END SPLIT CONFIGURATIONS
+quants = data.frame(lwr = rep(NA, length(up)), upr = rep(NA, length(up)))
+pred_mean = rep(NA, length(up))
+pred_med = rep(NA, length(up))
+for (i in seq_along(up)){ # set up the category assignments
+  quants[i,] = quantile(y, c(lo[i], up[i]))
+  pml.train[paste0("quant", i)] = 1*(quants$lwr[i] <= y & y < quants$upr[i])
+  pred_mean[i] = mean(pml.train$loss[pml.train[paste0("quant", i)] == 1])
+  pred_med[i] = median(pml.train$loss[pml.train[paste0("quant", i)] == 1])
+}
+set.seed(2018)
+rootp = floor(sqrt(131))
+vars1 = c( sample(names(pml.train)[c(2:131)], rootp), "quant1") # select variables for bag
+formulas = lapply(paste0("quant",1:length(up),"~."), formula) # make R formulas
+n = nrow(pml.train)
+n_folds = 10 # split the data in train and test sets
+indices = 1:nrow(pml.train)
+fold = split(indices, sample(1:n_folds, n, replace = TRUE))
+bags = 100
+preds = matrix(NA, nrow = length(fold[[1]]), ncol = bags) # to be filled with predictions
+for (j in 1:bags){
+  training = pml.train[-fold[[1]],] # note this does not change; set for fitting 
+  train_index = sample(1:nrow(training), nrow(training), replace = TRUE)
+  training = training[train_index,] # select bootstrapped subset for training 
+  testing = pml.train[fold[[1]],] # validation set
+  voting = matrix(NA, nrow = nrow(testing), ncol = nrow(quants)) # GLM vote on category
+  vars1 = c( sample(names(pml.train)[c(1:131)], rootp), "quant1")
+  for (q in 1:nrow(quants)){ # fits the GLMs and stores results for each category
+    glm1 = glm(formulas[[q]], data = training[, vars1], family = binomial)
+    for (var in vars1[str_detect(vars1, "cat")]){
+      glm1$xlevels[[var]] = union(levels(testing[, vars1][[var]]), 
+                                  glm1$xlevels[[var]])
+    }
+    voting[,q] = predict.glm(glm1, newdata = testing[, vars1], type = "response")
+    vars1[rootp + 1] = paste0("quant", q+1)
+  }
+  preds[,j] = apply(voting, 1, which.max)
+}
+######### TRANSLATE CATEGORY PREDICTION TO CONTINUOUS
+after_vote_preds = apply(preds, 1, function(x){as.integer(names(which.max(table(x))))})
+value_preds_mean = pred_mean[after_vote_preds]
+value_preds_med = pred_med[after_vote_preds]
+y_true = pml.train[fold[[1]], "loss"]
+mean_mae = mae(y = y_true, y_pred = value_preds_mean)
+med_mae = mae(y = y_true, y_pred = value_preds_med)
+```
+
+```{r, eval=FALSE}
+library(MASS)
+library(dplyr)
+library(stringr)
+mae = function(y, y_pred){ # MAE function
+  mean(abs(y-y_pred))
+}
+pml.train = read.csv("pml_train.csv")
+##### NEED TO KNOW HOW MANY OF EACH CATEGORY ARE PRESENT IN DATASET
+catsAll = unlist(lapply(pml.train[,2:117], function(x){length(levels(x))})) %>% unname() 
+y = pml.train$loss
+set.seed(561)
+n = nrow(pml.train)
+n_folds = 10
+indices = 1:nrow(pml.train)
+fold = split(indices, sample(1:n_folds, n, replace = TRUE)) #split data for CV
+C = seq(0.05,1,by = 0.05)
+MAEmatrix = NULL
+for (i in 1:n_folds){ # Begin n_folds cross validation
+  training = pml.train[-fold[[i]],]
+  testing = pml.train[fold[[i]],]
+  catsToGo = unlist(lapply(training[,2:117], function(x){length(unique(x))})) %>% unname()
+  catsRemove = 1 + which((catsToGo != catsAll)==TRUE) # remove categoricals with missing levels
+  if (length(catsRemove) == 0){
+    training = training
+    testing = testing
+  } else {
+    training = training[,-catsRemove]
+    testing = testing[,-catsRemove]
+  }
+  ridge = lm.ridge(log(loss)~.-id, data = training, lambda = C)
+  testing.matrix = model.matrix(log(loss)~.-id, testing)
+  pred = testing.matrix %*% t(coef(ridge))
+  maes = apply(pred, 2, function(x){mae(testing$loss, exp(x))})
+  MAEmatrix = rbind(MAEmatrix, maes)
+}
+```

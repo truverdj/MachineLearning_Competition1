@@ -40,11 +40,11 @@ Other EDA was difficult to perform, such as staring at boxplots of categorical v
 
 #### (2) Models
 
-In the interest of making my model more interesting (and so I could learn outside the box), I decided to not model the response as a continuous variable. Instead, I broke the response into quantiles. This gave me $m$ categories into which I would fit the data. This made $m$ a hyper-parameter in my models, along with the quantile divisions (they were not all evenly spaced), but more on that later. If the model predicted point $i$ was in category $j$, then I predicted the median of observations in category $j$ to be the value of `loss`. 
+In the interest of making my model more interesting (and for my own edification), I decided to not model the response as a continuous variable. Instead, I broke the response into quantiles. This gave me $m$ categories into which I would fit the data. This made $m$ a hyper-parameter in my models, along with the quantile divisions (they were not all evenly spaced), but more on that later. If the model predicted point $i$ was in category $j$, then I predicted the mean or median of observations in category $j$ to be the value of `loss`. 
 
 The other model I used was a fresh out of the box ridge regression from R's `MASS` library. Honestly, I would have preferred to slap some boosted decision trees on here since I have no idea what's going on with these predictors, but the first model took a long time to debug and tune. Given the practical limitations on my time, it would not have gone well for me to attempt boosting. 
 
-Really, the first model was my exploration of the question: "Could random forest techniques work for something other than decisions trees?" My conclusion, by the way, no, at least not the way I did it for GLMs. 
+The first model was my exploration of the question: "Could random forest techniques work for something other than decisions trees?" No, not really no, at least not the way I did it for GLMs. 
 
 I thought that if I could tune the values just right, the model would be more accurate and it would be like the golden ticket, like winning the lottery.
 
@@ -58,7 +58,7 @@ I began with linear regression just to get on the leaderboard and see how the su
 
 ##### Model 1: Bag of GLMs 
 
-First, I wanted to see what would happen if I applied the techniques of random forests to generalized linear models. That is, I took a bootstrap sample of $n$ observations, a $\sqrt{p}$ subset of predictors, fit a logisitic regression to this set, did this 80 times, and predicted category of loss by a majority vote of the regression models. The primary motivation of this model was curiosity. The `glm` function in `R` is well established, it's easy to use, and logistic regression models are easy to understand; I wanted to explore outside its mundane uses. The process was as follows:
+First, I wanted to see what would happen if I applied the techniques of random forests to generalized linear models. That is, I took a bootstrap sample of $n$ observations, a $\sqrt{p}$ subset of predictors, fit a logisitic regression to this set, did this 100 times, and predicted category of loss by a majority vote of the regression models. The primary motivation of this model was curiosity. The `glm` function in `R` is well established, it's easy to use, and logistic regression models are easy to understand; I wanted to explore outside its mundane uses. The process was as follows:
 
 for t in 1 to 80:  
 --randomly select $\sqrt{p}$ predictors  
@@ -70,11 +70,11 @@ for t in 1 to 80:
 ----category with highest probability becomes vote(t)  
 take majority over vote(t) to get predictions for each point  
 
-The parameters in this model are $m$, the number of categories, and the cutoff points. For example, the first configuration was $m=10$ categories, where category $j$ was the $j\cdot 10$% quantile (i.e. 10% quantile, 20% quantile...) of the reponse in the training set. The 10% quantile was about 700, so all observations with values between 0 and 700 were to category 1. The 20% quantile was about 1200, so category 2 observations with values between 700 and 1200 were category 2. So on and so forth. For the tuning of these parameters, see the Training section.
+The parameters in this model are $m$, the number of categories, and the cutoff points. For example, the first configuration was $m=10$ categories, where category $j$ was the $j\cdot 10$% quantile (i.e. 10% quantile, 20% quantile...) of the reponse in the training set. The 10% quantile was about 700, so all observations with values between 0 and 700 were to category 1. The 20% quantile was about 1200, so observations with values between 700 and 1200 were category 2. So on and so forth. For the tuning of these parameters, see the Training section.
 
 ##### Model 2: Boring Ridge Regression
 
-The second model was a ridge regression. I used the ready to serve `lm.ridge` from the `MASS` package in R. Tunning of the regularization term happened by 10-fold cross validation. 
+The second model was a ridge regression. I used the ready to serve `lm.ridge` from the `MASS` package in R. Tuning of the regularization term happened by 10-fold cross validation. 
 
 #### (3) Training
 
@@ -92,7 +92,7 @@ The `MASS` packages ridge regression finds the closed form solution to the ridge
 
 Right up front, I want to say, I did not tune the number of GLMs fit; it was always 100 once I got the loop working. The tuning occured in divding up the response categories. Why 100? There was a balancing act between "I want enough iterations that each predictor has a reasonable chance of being selected at least once" and "this takes too long to run." More on this problem in the Errors and Mistakes section. 
 
-The process for tuning category divisions was fairly simple: try a lot and see what does the best. I tried dividing at every 10% quantile, did not have a good experience, and noticed the model was prediciting 90% and above percentile for far too many points. I hypothesized the problem was the range of the 90% qauntile which reached all the way from 10,000 to above 100,000. So, I cut the tail by introducing a division at the 99% quantile. I alternatively tried coarse and fine divisions (see table below) to see the effects on accuracy. One configuration that may seem odd compared to the others is the last one in the table below. Those values came from an attempt to equally divide the range of the response (excluding the tail, which is too skewed). 
+The process for tuning category divisions was fairly simple: try a lot and see what does the best. I tried dividing at every 10% quantile, did not have a good experience, and noticed the model was prediciting 90% and above percentile for far too many points. I hypothesized the problem was the range of the 90% qauntile which reached all the way from 10,000 to above 100,000. So, I cut the tail by introducing a division at the 99% quantile. I alternatively tried coarse and fine divisions (see table below) to see the effects on accuracy. One configuration that may seem odd compared to the others is the third in the table below. Those values came from an attempt to equally divide the range of the response (excluding the tail, which is too skewed). 
 
 There is no meaningful way to represent this scheme graphically, so I have included a table. 
 
@@ -167,7 +167,7 @@ I embarked on this competition thinking that I would just go down the rabbit hol
 
 It did not go as planned.
 
-I delved too greedily and too deep. I pursued a model that was for my personal curiosity and for the thrill of exploring something new. The computation time was too long and tuning the Bagged GLMs did not leave me much time for my second model. My schedule for the past several weeks has been: wake up, tune model, run model, breakfast, class, check model, it's not done running, homework, dinner, check model, it's done, record error, tune model, run model, homework, cry, homework, midnight, check model, it's not done, sleep, model finishes, wake up, tune model. You get the idea. 
+I delved too greedily and too deep. I pursued a model that was for my personal curiosity and for the thrill of exploring something new. The computation time was too long for an untested model and tuning the Bag of GLMs did not leave me much time for my second model. My schedule for the past several weeks has been: wake up, tune model, run model, breakfast, class, check model, it's not done running, homework, dinner, check model, it's done, record error, tune model, run model, homework, cry, homework, midnight, check model, it's not done, sleep, model finishes, wake up, tune model. You get the idea. 
 
 Had I used a method with established tuning parameters, I would have happily left it to run in a loop on the stat department's 24-core machine for a week and collected my cross-validated results at the end. Alas, hindsight. 
 
@@ -175,7 +175,7 @@ The hardest part of the competition was getting out of bed each morning.
 
 #### (7) Predictive Accuracy
 
-I did not make many submissions to Kaggle because I based my decisions about model tuning and cross-validation error. For that reason, I do not have any plots of true test error, so please enjoy these returning plots of accuracy from the sections above. 
+I did not make many submissions to Kaggle because I based all my decisions on cross-validation error. For that reason, I do not have any plots of true test error, so please enjoy these returning plots of accuracy from the sections above. 
 
 ```{r}
 #10 quants: mean_mae = 3125.001; med_mae = 2741.118
@@ -220,15 +220,17 @@ ggplot(data = data.frame(finalMAEs, C), aes(x = C, y = finalMAEs)) +
 
 #### (7.5) Closing Thoughts
 
-Even though the accuracy of the Bag of GLMs is questionable, I am glad I decided to explore it. It gave me practice transforming a problem with continuous response to one with classification response. Exposure to those challenges (such as "where do we split categories") was new and memorable. To guess at why the Bag of GLMs is inferior to a random forest, I would say its the strength of a GLM versus a decision tree. The individual tight fit of every tree within a forest is superior to the fit of a GLM. This revelation isn't much help to me in terms of the competition, but it does satisfy my own curiosity about Machine Learning. 
+Even though the accuracy of the Bag of GLMs is questionable, I am glad I decided to explore it. It gave me practice transforming a problem with continuous response to one with classification response. Exposure to those challenges (such as "where do we split to make categories") was new and memorable. To guess at why the Bag of GLMs is inferior to a random forest, I would say its the strength of a GLM versus a decision tree. The individual tight (over)fit of every tree within a forest is superior to the fit of a GLM. This revelation isn't much help to me in terms of the competition, but it does satisfy my own curiosity about Machine Learning. 
+
+\newpage
 
 #### (8) Code: DO NOT ATTEMPT TO RUN ON LAPTOP 
 
-Heed the warning. This code takes upwards of six hours to run on the Stat department's 24-core machine (dependent on number of active users). If you try to run it on your laptop, you're going to have a bad day, and that does not bode well for my grade. 
+Heed the warning. This code takes upwards of six hours to run on the Stat department's 24-core machine (dependent on number of active users). If you try to run it on your laptop, you're going to have a bad day, so please finish grading this before you try it. 
 
 ##### Bag of GLMs
 
-```{r, eval=FALSE}
+```{r, eval=FALSE, echo=TRUE}
 library(dplyr)
 library(stringr)
 mae = function(y, y_pred){ # MAE calculating function
@@ -319,7 +321,9 @@ mean_mae = mae(y = y_true, y_pred = value_preds_mean)
 med_mae = mae(y = y_true, y_pred = value_preds_med)
 ```
 
-```{r, eval=FALSE}
+##### Ridge Regression
+
+```{r, eval=FALSE, echo=TRUE}
 library(MASS)
 library(dplyr)
 library(stringr)
